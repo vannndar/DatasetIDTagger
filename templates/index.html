@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -13,78 +14,256 @@
             --success: #66bb6a;
             --warning: #ffa726;
         }
-        body { font-family: 'Segoe UI', sans-serif; background: var(--bg-color); color: var(--text-color); margin: 0; display: flex; height: 100vh; overflow: hidden; }
-        
+
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
         /* Layout */
-        #app { display: flex; width: 100%; height: 100%; }
-        
+        #app {
+            display: none;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Dataset Picker (Home) */
+        #dataset-picker {
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            overflow-y: auto;
+        }
+
+        .dataset-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+            width: 100%;
+            max-width: 1000px;
+            margin-top: 20px;
+        }
+
+        .dataset-card {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #444;
+            cursor: pointer;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+
+        .dataset-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--accent);
+        }
+
+        .ds-title {
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: var(--accent);
+        }
+
+        .ds-stat {
+            font-size: 0.9rem;
+            color: #888;
+        }
+
         /* Sidebar / Gallery */
-        #gallery-panel { width: 350px; display: flex; flex-direction: column; background: #252526; border-right: 1px solid #333; z-index: 10;}
-        .tabs { display: flex; }
-        .tab { flex: 1; padding: 15px; text-align: center; background: #333; cursor: pointer; border-bottom: 2px solid transparent; }
-        .tab.active { background: #252526; border-bottom: 2px solid var(--accent); color: var(--accent); font-weight: bold; }
-        
-        #image-list { flex: 1; overflow-y: auto; padding: 10px; }
-        .img-item { 
-            padding: 10px; margin-bottom: 5px; background: var(--card-bg); 
-            border-radius: 4px; cursor: pointer; border-left: 4px solid transparent;
+        #gallery-panel {
+            width: 350px;
+            display: flex;
+            flex-direction: column;
+            background: #252526;
+            border-right: 1px solid #333;
+            z-index: 10;
+        }
+
+        .tabs {
+            display: flex;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 15px;
+            text-align: center;
+            background: #333;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+
+        .tab.active {
+            background: #252526;
+            border-bottom: 2px solid var(--accent);
+            color: var(--accent);
+            font-weight: bold;
+        }
+
+        #image-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .img-item {
+            padding: 10px;
+            margin-bottom: 5px;
+            background: var(--card-bg);
+            border-radius: 4px;
+            cursor: pointer;
+            border-left: 4px solid transparent;
             transition: background 0.2s;
         }
-        .img-item:hover { background: #383838; }
-        .img-item.active { background: #383838; border-left-color: var(--accent); }
-        .img-item.completed { border-left-color: var(--success); }
-        .img-item.in-progress { border-left-color: var(--warning); }
-        
-        .img-meta { font-size: 0.8em; color: #888; margin-top: 4px; display: flex; justify-content: space-between;}
-        
+
+        .img-item:hover {
+            background: #383838;
+        }
+
+        .img-item.active {
+            background: #383838;
+            border-left-color: var(--accent);
+        }
+
+        .img-item.completed {
+            border-left-color: var(--success);
+        }
+
+        .img-item.in-progress {
+            border-left-color: var(--warning);
+        }
+
+        .img-meta {
+            font-size: 0.8em;
+            color: #888;
+            margin-top: 4px;
+            display: flex;
+            justify-content: space-between;
+        }
+
         /* Main / Editor */
-        #editor-panel { flex: 1; position: relative; display: flex; flex-direction: column; background: #111; }
-        
-        #canvas-container { flex: 1; position: relative; overflow: hidden; cursor: grab; }
-        #canvas-container:active { cursor: grabbing; }
-        canvas { display: block; transform-origin: 0 0; }
-        
+        #editor-panel {
+            flex: 1;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            background: #111;
+        }
+
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            cursor: grab;
+        }
+
+        #canvas-container:active {
+            cursor: grabbing;
+        }
+
+        canvas {
+            display: block;
+            transform-origin: 0 0;
+        }
+
         /* Toolbar */
-        #toolbar { 
-            height: 50px; background: #252526; display: flex; align-items: center; padding: 0 20px; 
-            border-bottom: 1px solid #333; justify-content: space-between;
+        #toolbar {
+            height: 50px;
+            background: #252526;
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            border-bottom: 1px solid #333;
+            justify-content: space-between;
         }
-        .tool-group { display: flex; gap: 10px; align-items: center;}
-        
-        button { 
-            background: #3e3e42; border: 1px solid #555; color: white; padding: 6px 12px; 
-            border-radius: 4px; cursor: pointer; transition: 0.2s; 
+
+        .tool-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
         }
-        button:hover { background: #505055; }
-        button.primary { background: var(--accent); border-color: var(--accent); }
-        button.primary:hover { background: #357abd; }
-        
+
+        button {
+            background: #3e3e42;
+            border: 1px solid #555;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        button:hover {
+            background: #505055;
+        }
+
+        button.primary {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        button.primary:hover {
+            background: #357abd;
+        }
+
         /* Floating ID Input */
         #id-input-box {
-            position: absolute; display: none; background: #2d2d2d; padding: 10px;
-            border: 1px solid var(--accent); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            position: absolute;
+            display: none;
+            background: #2d2d2d;
+            padding: 10px;
+            border: 1px solid var(--accent);
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
         }
-        #id-input-box input { 
-            background: #1e1e1e; border: 1px solid #444; color: white; padding: 5px; width: 100px; 
+
+        #id-input-box input {
+            background: #1e1e1e;
+            border: 1px solid #444;
+            color: white;
+            padding: 5px;
+            width: 100px;
         }
-        
     </style>
 </head>
+
 <body>
+    <!-- Dataset Selection View -->
+    <div id="dataset-picker">
+        <h1>Select Dataset</h1>
+        <div id="dataset-grid" class="dataset-grid">
+            <!-- Populated by JS -->
+            <div style="color: #888;">Loading datasets...</div>
+        </div>
+    </div>
+
+    <!-- Main Editor View -->
     <div id="app">
         <div id="gallery-panel">
+            <div style="padding: 10px; border-bottom: 1px solid #333;">
+                <button onclick="exitToHome()" style="width: 100%; font-size: 0.9em;">&larr; Back to Datasets</button>
+            </div>
             <div class="tabs">
                 <div class="tab active" onclick="switchTab('train')">TRAIN</div>
                 <div class="tab" onclick="switchTab('val')">VAL</div>
             </div>
-            <div id="status-bar" style="padding: 10px; font-size: 0.85em; background: #2d2d2d; border-bottom: 1px solid #333;">
+            <div id="status-bar"
+                style="padding: 10px; font-size: 0.85em; background: #2d2d2d; border-bottom: 1px solid #333;">
                 Loading...
             </div>
             <div id="image-list">
                 <!-- Javascript will populate this -->
             </div>
         </div>
-        
+
         <div id="editor-panel">
             <div id="toolbar">
                 <div class="tool-group">
@@ -100,15 +279,16 @@
                     <button class="primary" onclick="editor.saveCurrent()">SAVE (Ctrl+S)</button>
                 </div>
             </div>
-            
+
             <div id="canvas-container">
                 <canvas id="main-canvas"></canvas>
-                
+
                 <div id="id-input-box">
                     <div style="margin-bottom: 5px; font-size: 0.9em;">Assign Cow ID</div>
                     <input type="text" id="cow-id-input" maxlength="6" placeholder="######">
                     <div style="margin-top: 5px; display: flex; gap: 5px;">
-                        <button class="primary" style="font-size: 0.8em; padding: 4px 8px;" onclick="editor.confirmID()">OK</button>
+                        <button class="primary" style="font-size: 0.8em; padding: 4px 8px;"
+                            onclick="editor.confirmID()">OK</button>
                         <button style="font-size: 0.8em; padding: 4px 8px;" onclick="editor.cancelID()">Cancel</button>
                     </div>
                 </div>
@@ -119,4 +299,5 @@
     <!-- Load App Logic -->
     <script src="/static/app.js"></script>
 </body>
+
 </html>

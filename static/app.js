@@ -1,6 +1,7 @@
 
 // --- Global State ---
 const state = {
+    currentDataset: null,
     currentSplit: 'train', // 'train' or 'val'
     imageList: [],
     currentImageIndex: -1,
@@ -22,13 +23,15 @@ const state = {
     selectedBoxIndex: -1,
 };
 
+const keysPressed = {}; // Track held keys for smooth movement
+
 const canvas = document.getElementById('main-canvas');
 const ctx = canvas.getContext('2d');
 const container = document.getElementById('canvas-container');
 
 // --- Initialization ---
 async function init() {
-    await fetchImageList('train');
+    await fetchDatasets();
     window.addEventListener('resize', handleResize);
     handleResize();
 
@@ -38,21 +41,229 @@ async function init() {
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
 
-    // Hotkeys
-    document.addEventListener('keydown', (e) => {
-        if (e.ctrlKey && e.key === 's') {
-            e.preventDefault();
-            editor.saveCurrent();
-        }
+    // Global Hotkeys
+    window.addEventListener('keydown', handleGlobalKeydown);
+    window.addEventListener('keyup', (e) => {
+        keysPressed[e.key] = false;
+        // Also clear Ctrl if released
+        if (e.key === 'Control') keysPressed['Control'] = false;
     });
 
-    // Input Enter key
-    document.getElementById('cow-id-input').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') editor.confirmID();
+    // Start Animation Loop for smooth panning
+    requestAnimationFrame(updateLoop);
+
+    // Input specific logic
+    const input = document.getElementById('cow-id-input');
+    input.addEventListener('keydown', (e) => {
+        // We stop propagation so global keys don't trigger (like WASD typing)
+        // BUT we need to handle Tab explicitly here.
+        e.stopPropagation();
+
+        if (e.key === 'Enter') {
+            editor.confirmID();
+        } else if (e.key === 'Escape') {
+            editor.cancelID();
+        } else if (e.key === 'Tab') {
+            e.preventDefault(); // Stop creating a tab character or moving focus naturally
+            const idx = state.selectedBoxIndex; // Capture before save wipes it
+            editor.confirmID(); // Save whatever is there
+            cycleSelection(e.shiftKey ? -1 : 1, idx); // Move to next box using preserved index
+        }
     });
 }
 
+function updateLoop() {
+    if (state.currentDataset && document.getElementById('app').style.display !== 'none') {
+        let dx = 0;
+        let dy = 0;
+        const speed = 10; // Pixels per frame - smooth!
+
+        // Panning Logic (WASD or Ctrl+Arrows)
+        const isCtrl = keysPressed['Control'];
+
+        if (keysPressed['w'] || keysPressed['W'] || (isCtrl && keysPressed['ArrowUp'])) {
+            dy += speed;
+        }
+        if (keysPressed['s'] || keysPressed['S'] || (isCtrl && keysPressed['ArrowDown'])) {
+            dy -= speed;
+        }
+        if (keysPressed['a'] || keysPressed['A'] || (isCtrl && keysPressed['ArrowLeft'])) {
+            dx += speed;
+        }
+        if (keysPressed['d'] || keysPressed['D'] || (isCtrl && keysPressed['ArrowRight'])) {
+            dx -= speed;
+        }
+
+        if (dx !== 0 || dy !== 0) {
+            panView(dx, dy);
+        }
+    }
+    requestAnimationFrame(updateLoop);
+}
+
+function handleGlobalKeydown(e) {
+    keysPressed[e.key] = true;
+    if (e.key === 'Control') keysPressed['Control'] = true;
+
+    if (!state.currentDataset || document.getElementById('app').style.display === 'none') return;
+
+    // Ignore if input is focused (handled separately)
+    if (document.activeElement === document.getElementById('cow-id-input')) return;
+
+    // --- Navigation (Images) ---
+    if (e.key === 'ArrowRight' && !e.ctrlKey) {
+        e.preventDefault();
+        loadNextImage();
+    } else if (e.key === 'ArrowLeft' && !e.ctrlKey) {
+        e.preventDefault();
+        loadPrevImage();
+    }
+
+    // --- Zoom ---
+    else if (e.key === 'ArrowUp' && !e.ctrlKey) {
+        e.preventDefault();
+        window.editor.zoomIn();
+    } else if (e.key === 'ArrowDown' && !e.ctrlKey) {
+        e.preventDefault();
+        window.editor.zoomOut();
+    }
+
+    // --- Fit View ---
+    else if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        window.editor.resetView();
+    }
+
+    // --- Selection (Tab) ---
+    else if (e.key === 'Tab') {
+        e.preventDefault();
+        cycleSelection(e.shiftKey ? -1 : 1);
+    }
+
+    // --- Save ---
+    else if (e.ctrlKey && e.key === 's') {
+        e.preventDefault();
+        editor.saveCurrent();
+    }
+
+    // Note: Panning is handled in updateLoop via keysPressed
+}
+
+function panView(dx, dy) {
+    state.offsetX += dx;
+    state.offsetY += dy;
+    renderCanvas();
+}
+
+function loadNextImage() {
+    if (state.currentImageIndex < state.imageList.length - 1) {
+        loadEditor(state.currentImageIndex + 1);
+    }
+}
+
+function loadPrevImage() {
+    if (state.currentImageIndex > 0) {
+        loadEditor(state.currentImageIndex - 1);
+    }
+}
+
+function cycleSelection(direction, overrideStartIndex = null) {
+    if (!state.annotationData || !state.annotationData.annotations.length) return;
+
+    const annots = state.annotationData.annotations;
+
+    // Sort boxes from left to right for logical tabbing
+    // We create a temporary array of indices with their X positions
+    const sortedIndices = annots.map((box, i) => ({
+        index: i,
+        x: box.yolo[0] // x_center
+    })).sort((a, b) => a.x - b.x);
+
+    // Find current index in this sorted list
+    let currentSortedIdx = -1;
+    let startIdx = (overrideStartIndex !== null) ? overrideStartIndex : state.selectedBoxIndex;
+
+    if (startIdx !== -1) {
+        currentSortedIdx = sortedIndices.findIndex(item => item.index === startIdx);
+    }
+
+    let nextSortedIdx = currentSortedIdx + direction;
+
+    // Wrap around? Or stop? Let's wrap
+    if (nextSortedIdx >= sortedIndices.length) nextSortedIdx = 0;
+    if (nextSortedIdx < 0) nextSortedIdx = sortedIndices.length - 1;
+
+    const targetRealIndex = sortedIndices[nextSortedIdx].index;
+
+    // Calculate click coordinates for the box to properly position input
+    // We need 'screen' coordinates for the input box
+    const box = annots[targetRealIndex];
+    if (state.imgObj) {
+        const iw = state.imgObj.width;
+        const ih = state.imgObj.height;
+        const [xc, yc, w, h] = box.yolo;
+
+        // Center of box in canvas coords
+        const px = (xc * iw * state.scale) + state.offsetX;
+        const py = (yc * ih * state.scale) + state.offsetY;
+
+        // Add canvas container offset
+        const rect = container.getBoundingClientRect();
+        const clientX = rect.left + px;
+        const clientY = rect.top + py;
+
+        selectBox(targetRealIndex, clientX, clientY);
+    }
+}
+
+// --- API & State ---
+
+async function fetchDatasets() {
+    try {
+        const res = await fetch('/api/datasets');
+        const datasets = await res.json();
+
+        const grid = document.getElementById('dataset-grid');
+        grid.innerHTML = '';
+
+        if (datasets.length === 0) {
+            grid.innerHTML = '<div style="color:#e0e0e0;">No datasets found in dataset/ folder. (Must end with _dataset)</div>';
+        }
+
+        datasets.forEach(ds => {
+            const card = document.createElement('div');
+            card.className = 'dataset-card';
+            card.innerHTML = `
+                <div class="ds-title">${ds.name}</div>
+                <div class="ds-stat">${ds.image_count} Images</div>
+            `;
+            card.onclick = () => loadDataset(ds.name);
+            grid.appendChild(card);
+        });
+    } catch (err) {
+        console.error("Failed to load datasets", err);
+        document.getElementById('dataset-grid').innerHTML = '<div style="color:red;">Failed to load datasets from API.</div>';
+    }
+}
+
+function loadDataset(name) {
+    state.currentDataset = name;
+    document.getElementById('dataset-picker').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    handleResize();
+    fetchImageList('train');
+}
+
+function exitToHome() {
+    state.currentDataset = null;
+    document.getElementById('app').style.display = 'none';
+    document.getElementById('dataset-picker').style.display = 'flex';
+    fetchDatasets();
+}
+
 async function fetchImageList(split) {
+    if (!state.currentDataset) return;
+
     state.currentSplit = split;
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelector(`.tab[onclick*="${split}"]`).classList.add('active');
@@ -60,7 +271,7 @@ async function fetchImageList(split) {
     document.getElementById('image-list').innerHTML = '<div style="padding:10px; color:#888;">Loading images...</div>';
 
     try {
-        const res = await fetch(`/api/images/${split}`);
+        const res = await fetch(`/api/images/${state.currentDataset}/${split}`);
         state.imageList = await res.json();
         renderGallery();
         updateStatusBar();
@@ -82,6 +293,10 @@ function renderGallery() {
         if (item.labeled_ids.length > 3) idSubset += ` +${item.labeled_ids.length - 3}`;
         if (!idSubset) idSubset = "Unknown";
 
+        // Adding a thumbnail placeholder or something to make it look like "Gallery"?
+        // User asked "Where is mode gallery".
+        // Let's stick to list but maybe call it "Gallery Panel"
+
         div.innerHTML = `
             <div style="font-weight:500;">${item.filename}</div>
             <div class="img-meta">
@@ -99,36 +314,37 @@ function updateStatusBar() {
     const completed = state.imageList.filter(i => i.status === 'completed').length;
     const prog = state.imageList.filter(i => i.status === 'in_progress').length;
     document.getElementById('status-bar').innerText =
-        `Total: ${total} | Done: ${completed} | WiP: ${prog}`;
+        `DS: ${state.currentDataset} | Total: ${total} | Done: ${completed} | WiP: ${prog}`;
 }
 
 async function loadEditor(index) {
     if (index < 0 || index >= state.imageList.length) return;
 
-    // Save previous if needed? (We rely on manual save for now)
-
     state.currentImageIndex = index;
-    renderGallery(); // Update active highlight
+    renderGallery();
+
+    // Scroll active item into view
+    const activeEl = document.querySelector('.img-item.active');
+    if (activeEl) {
+        activeEl.scrollIntoView({ behavior: 'auto', block: 'center' });
+    }
 
     const item = state.imageList[index];
     document.getElementById('current-filename').innerText = item.filename;
 
-    // Load Image
-    const imgUrl = `/api/image_file/${state.currentSplit}/${item.filename}`;
+    const imgUrl = `/api/image_file/${state.currentDataset}/${state.currentSplit}/${item.filename}`;
     const img = new Image();
     img.src = imgUrl;
     img.onload = () => {
         state.imgObj = img;
-        state.scale = 1; // Reset zoom logic? Or keep fit
-        state.offsetX = 0;
-        state.offsetY = 0;
         fitImageToScreen();
         renderCanvas();
     };
 
-    // Load Annotations
-    const annotRes = await fetch(`/api/annotation/${state.currentSplit}/${item.filename}`);
+    const annotRes = await fetch(`/api/annotation/${state.currentDataset}/${state.currentSplit}/${item.filename}`);
     state.annotationData = await annotRes.json();
+
+    // Sort logic for tab is calculated on fly, so no need to sort data structure
     renderCanvas();
 }
 
@@ -155,23 +371,19 @@ function fitImageToScreen() {
 function renderCanvas() {
     if (!state.imgObj) return;
 
-    // Clear
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     ctx.save();
     ctx.translate(state.offsetX, state.offsetY);
     ctx.scale(state.scale, state.scale);
 
-    // Draw Image (High Res)
     ctx.drawImage(state.imgObj, 0, 0);
 
-    // Draw Boxes
     if (state.annotationData && state.annotationData.annotations) {
         const iw = state.imgObj.width;
         const ih = state.imgObj.height;
 
         state.annotationData.annotations.forEach((box, idx) => {
-            // YOLO is x_center, y_center, w, h normalized
             const [xc, yc, w, h] = box.yolo;
 
             const px = (xc - w / 2) * iw;
@@ -179,8 +391,7 @@ function renderCanvas() {
             const pw = w * iw;
             const ph = h * ih;
 
-            // Style
-            ctx.lineWidth = 2 / state.scale; // Maintain visual thickness
+            ctx.lineWidth = 2 / state.scale;
 
             if (idx === state.selectedBoxIndex) {
                 ctx.strokeStyle = '#00ff00';
@@ -192,14 +403,13 @@ function renderCanvas() {
                 ctx.strokeStyle = '#4a90e2';
                 ctx.fillStyle = 'rgba(74, 144, 226, 0.1)';
             } else {
-                ctx.strokeStyle = '#ffa726'; // Unknown
+                ctx.strokeStyle = '#ffa726';
                 ctx.fillStyle = 'rgba(0,0,0,0)';
             }
 
             ctx.fillRect(px, py, pw, ph);
             ctx.strokeRect(px, py, pw, ph);
 
-            // Draw Label
             if (idx === state.selectedBoxIndex || box.cow_id) {
                 ctx.font = `${20 / state.scale}px Arial`;
                 ctx.fillStyle = idx === state.selectedBoxIndex ? '#00ff00' : '#4a90e2';
@@ -212,8 +422,6 @@ function renderCanvas() {
     ctx.restore();
 }
 
-// --- Interaction Handlers ---
-
 function handleWheel(e) {
     if (!state.imgObj) return;
     e.preventDefault();
@@ -222,19 +430,15 @@ function handleWheel(e) {
     const direction = e.deltaY < 0 ? 1 : -1;
     const factor = 1 + (direction * zoomIntensity);
 
-    // Zoom towards mouse pointer
     const mouseX = e.offsetX;
     const mouseY = e.offsetY;
 
-    // Convert mouse to world space
     const worldX = (mouseX - state.offsetX) / state.scale;
     const worldY = (mouseY - state.offsetY) / state.scale;
 
-    // Apply Zoom
     let newScale = state.scale * factor;
-    newScale = Math.max(0.05, Math.min(10, newScale)); // Limits
+    newScale = Math.max(0.05, Math.min(10, newScale));
 
-    // Adjust Offset to keep mouse point stable
     state.offsetX = mouseX - worldX * newScale;
     state.offsetY = mouseY - worldY * newScale;
     state.scale = newScale;
@@ -242,22 +446,22 @@ function handleWheel(e) {
     updateZoomDisplay();
     renderCanvas();
 
-    // Hide input if zooming
+    // Don't close input if we are just scrolling? Better to close to avoid detached input
     document.getElementById('id-input-box').style.display = 'none';
 }
 
 function handleMouseDown(e) {
-    if (e.button === 0) { // Left Click
+    // Ignore clicks inside the input box or toolbar
+    if (e.target.closest('#id-input-box') || e.target.closest('#toolbar')) return;
+
+    if (e.button === 0) {
         if (state.hoveredBoxIndex !== -1) {
-            // Select Box
             selectBox(state.hoveredBoxIndex, e.clientX, e.clientY);
         } else {
-            // Start Drag
             state.isDragging = true;
             state.lastMouseX = e.clientX;
             state.lastMouseY = e.clientY;
 
-            // Deselect
             state.selectedBoxIndex = -1;
             document.getElementById('id-input-box').style.display = 'none';
             renderCanvas();
@@ -277,10 +481,6 @@ function handleMouseMove(e) {
         state.lastMouseY = e.clientY;
         renderCanvas();
     } else {
-        // Warning: Heavy hit detection on mouse move?
-        // Optimization: Debounce mousemove?
-        // Convert mouse to Image Space
-        // Canvas Rect
         const rect = canvas.getBoundingClientRect();
         const mx = e.clientX - rect.left;
         const my = e.clientY - rect.top;
@@ -293,7 +493,6 @@ function handleMouseMove(e) {
 
         let found = -1;
         if (state.annotationData && state.annotationData.annotations) {
-            // Iterate backwards to find top-most
             for (let i = state.annotationData.annotations.length - 1; i >= 0; i--) {
                 const box = state.annotationData.annotations[i];
                 const [xc, yc, w, h] = box.yolo;
@@ -335,7 +534,6 @@ function selectBox(index, clientX, clientY) {
 
     inputField.value = box.cow_id || '';
 
-    // Position input near the mouse click but keep inside viewport
     inputContainer.style.display = 'block';
 
     // Get relative to container
@@ -343,10 +541,18 @@ function selectBox(index, clientX, clientY) {
     let left = clientX - rect.left + 20;
     let top = clientY - rect.top;
 
+    // Bounds check to keep input on screen
+    if (left + 150 > rect.width) left = clientX - rect.left - 150;
+    if (top + 60 > rect.height) top = clientY - rect.top - 60;
+
     inputContainer.style.left = left + 'px';
     inputContainer.style.top = top + 'px';
 
-    inputField.focus();
+    // Autofocus
+    setTimeout(() => {
+        inputField.focus();
+        inputField.select(); // Select all text so user can overwrite ID easily
+    }, 10);
 }
 
 window.editor = {
@@ -365,6 +571,7 @@ window.editor = {
         renderCanvas();
     },
     confirmID: () => {
+        // If nothing selected, maybe we were called via Enter key on global?
         if (state.selectedBoxIndex === -1) return;
 
         const val = document.getElementById('cow-id-input').value.trim();
@@ -395,7 +602,7 @@ window.editor = {
         btn.innerText = "Saving...";
 
         try {
-            const url = `/api/save/${state.currentSplit}/${state.annotationData.filename}`;
+            const url = `/api/save/${state.currentDataset}/${state.currentSplit}/${state.annotationData.filename}`;
             const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -407,10 +614,8 @@ window.editor = {
                 btn.innerText = "Saved!";
                 setTimeout(() => btn.innerText = originalText, 1000);
 
-                // Update local list visual immediately
                 const item = state.imageList[state.currentImageIndex];
 
-                // Recalculate status locally without refetching entire list to be snappy
                 const annots = state.annotationData.annotations;
                 const labeled = annots.filter(a => a.status === 'labeled');
                 item.labeled_ids = labeled.map(a => a.cow_id);
@@ -420,7 +625,7 @@ window.editor = {
                 else if (labeled.length > 0) item.status = 'in_progress';
                 else item.status = 'touched';
 
-                renderGallery(); // updates sidebar
+                renderGallery();
             }
         } catch (e) {
             alert('Save failed: ' + e);
@@ -430,7 +635,9 @@ window.editor = {
 };
 
 function switchTab(split) {
-    fetchImageList(split);
+    if (state.currentDataset) {
+        fetchImageList(split);
+    }
 }
 
 function updateZoomDisplay() {

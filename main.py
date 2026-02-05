@@ -14,17 +14,15 @@ from pydantic import BaseModel
 app = FastAPI(title="Cow Tagger Tool")
 
 # --- Configuration ---
-# Script is now running INSIDE the dataset folder
-DATASET_ROOT = Path(".") 
-IMAGES_DIR = DATASET_ROOT / "images"
-LABELS_DIR = DATASET_ROOT / "labels"
-# We save our augmented/tagged data here
-LABELED_DATA_DIR = DATASET_ROOT / "labeled_data"
-
-# Ensure output directory exists
-LABELED_DATA_DIR.mkdir(parents=True, exist_ok=True)
-(LABELED_DATA_DIR / "train").mkdir(exist_ok=True)
-(LABELED_DATA_DIR / "val").mkdir(exist_ok=True)
+# Root folder containing all datasets
+# Structure: dataset/
+#               bucket_1_dataset/
+#                   images/
+#                   labels/
+#                   labeled_data/
+DATASET_ROOT = Path("dataset")
+# Ensure the root dataset folder exists
+DATASET_ROOT.mkdir(exist_ok=True)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -44,6 +42,7 @@ class BBox(BaseModel):
     cow_id: Optional[str] = None # 1-6 digit string
 
 class ImageAnnotation(BaseModel):
+    dataset: Optional[str] = None
     filename: str
     split: str
     width: int
@@ -51,31 +50,34 @@ class ImageAnnotation(BaseModel):
     annotations: List[BBox]
 
 # --- Helper Functions ---
-def get_yolo_labels(split: str, filename: str) -> List[BBox]:
+def get_dataset_path(dataset_name: str) -> Path:
+    path = DATASET_ROOT / dataset_name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Dataset {dataset_name} not found")
+    return path
+
+def get_yolo_labels(dataset_name: str, split: str, filename: str) -> List[BBox]:
     """Reads original YOLO .txt file and converts to BBox objects."""
-    txt_path = LABELS_DIR / split / f"{Path(filename).stem}.txt"
+    ds_path = get_dataset_path(dataset_name)
+    txt_path = ds_path / "labels" / split / f"{Path(filename).stem}.txt"
     bboxes = []
     if txt_path.exists():
         with open(txt_path, "r") as f:
             for line in f:
                 parts = line.strip().split()
                 if len(parts) >= 5:
-                    # YOLO: class x y w h ...keypoints...
-                    # We only care about box first
-                    # Skipping keypoints for now in this visualization usage, 
-                    # but we preserve them if we were to rewrite txt (which we aren't, we write json)
-                    
+                    # YOLO: class x y w h
                     bbox = [float(x) for x in parts[1:5]]
                     bboxes.append(BBox(yolo=bbox, status="unknown", cow_id=None))
     return bboxes
 
-def get_saved_annotation(split: str, filename: str) -> Optional[ImageAnnotation]:
+def get_saved_annotation(dataset_name: str, split: str, filename: str) -> Optional[ImageAnnotation]:
     """Checks if we already have a JSON file for this image."""
-    json_path = LABELED_DATA_DIR / split / f"{Path(filename).stem}.json"
+    ds_path = get_dataset_path(dataset_name)
+    json_path = ds_path / "labeled_data" / split / f"{Path(filename).stem}.json"
     if json_path.exists():
         with open(json_path, "r") as f:
             data = json.load(f)
-            # Validate/Convert to Pydantic model
             return ImageAnnotation(**data)
     return None
 
@@ -85,10 +87,41 @@ def get_saved_annotation(split: str, filename: str) -> Optional[ImageAnnotation]
 def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.get("/api/images/{split}")
-def list_images(split: SplitEnum):
+@app.get("/api/datasets")
+def list_datasets():
+    """Lists all available datasets (folders ending in _dataset) and their stats."""
+    datasets = []
+    if not DATASET_ROOT.exists():
+        return []
+        
+    for item in DATASET_ROOT.iterdir():
+        if item.is_dir() and item.name.endswith("_dataset"):
+            # Count images
+            img_count = 0
+            # Check train/val inside images
+            img_dir = item / "images"
+            if img_dir.exists():
+                for split in ["train", "val"]:
+                    split_dir = img_dir / split
+                    if split_dir.exists():
+                        img_count += len(list(split_dir.glob("*.jpg")))
+            
+            datasets.append({
+                "name": item.name,
+                "image_count": img_count
+            })
+    return datasets
+
+@app.get("/api/images/{dataset_name}/{split}")
+def list_images(dataset_name: str, split: SplitEnum):
     """Returns list of image filenames for a split, with tagging status."""
-    target_dir = IMAGES_DIR / split.value
+    ds_path = get_dataset_path(dataset_name)
+    target_dir = ds_path / "images" / split.value
+    
+    # Ensure labeled_data structure exists for this dataset
+    labeled_dir = ds_path / "labeled_data" / split.value
+    labeled_dir.mkdir(parents=True, exist_ok=True)
+    
     if not target_dir.exists():
         return []
         
@@ -98,7 +131,7 @@ def list_images(split: SplitEnum):
     response_list = []
     for img_name in images:
         # Check if labeled
-        json_path = LABELED_DATA_DIR / split.value / f"{Path(img_name).stem}.json"
+        json_path = labeled_dir / f"{Path(img_name).stem}.json"
         
         status = "untouched"
         cow_ids = []
@@ -122,7 +155,7 @@ def list_images(split: SplitEnum):
         
         else:
             # Check original label count
-            txt_path = LABELS_DIR / split.value / f"{Path(img_name).stem}.txt"
+            txt_path = ds_path / "labels" / split.value / f"{Path(img_name).stem}.txt"
             if txt_path.exists():
                 with open(txt_path, "r") as f:
                     box_count = sum(1 for line in f if line.strip())
@@ -136,39 +169,39 @@ def list_images(split: SplitEnum):
         
     return response_list
 
-@app.get("/api/image_file/{split}/{filename}")
-def get_image_file(split: SplitEnum, filename: str):
+@app.get("/api/image_file/{dataset_name}/{split}/{filename}")
+def get_image_file(dataset_name: str, split: SplitEnum, filename: str):
     """Serves the raw image file."""
-    file_path = IMAGES_DIR / split.value / filename
+    ds_path = get_dataset_path(dataset_name)
+    file_path = ds_path / "images" / split.value / filename
     if file_path.exists():
         return FileResponse(file_path)
     raise HTTPException(status_code=404, detail="Image not found")
 
-@app.get("/api/annotation/{split}/{filename}")
-def get_annotation(split: SplitEnum, filename: str):
+@app.get("/api/annotation/{dataset_name}/{split}/{filename}")
+def get_annotation(dataset_name: str, split: SplitEnum, filename: str):
     """Gets annotation data. Prioritizes JSON, falls back to YOLO txt."""
     
     # 1. Try Loading Saved JSON
-    saved = get_saved_annotation(split.value, filename)
+    saved = get_saved_annotation(dataset_name, split.value, filename)
     if saved:
         return saved
     
-    # 2. Fallback to calculating from YOLO txt + calculating dimensions logic?
-    # Ideally frontend loads image first to calculate W/H, but we can do a quick check if needed.
-    # For now, we will return a partial structure and let frontend fill W/H if missing, 
-    # OR we open image here to check dim (slower but safer)
-    
+    # 2. Fallback to calculating from YOLO txt
     from PIL import Image
-    img_path = IMAGES_DIR / split.value / filename
+    ds_path = get_dataset_path(dataset_name)
+    img_path = ds_path / "images" / split.value / filename
+    
     if not img_path.exists():
         raise HTTPException(status_code=404, detail="Image not found")
     
     with Image.open(img_path) as img:
         width, height = img.size
         
-    yolo_boxes = get_yolo_labels(split.value, filename)
+    yolo_boxes = get_yolo_labels(dataset_name, split.value, filename)
     
     return ImageAnnotation(
+        dataset=dataset_name,
         filename=filename,
         split=split.value,
         width=width,
@@ -176,10 +209,15 @@ def get_annotation(split: SplitEnum, filename: str):
         annotations=yolo_boxes
     )
 
-@app.post("/api/save/{split}/{filename}")
-def save_annotation(split: SplitEnum, filename: str, data: ImageAnnotation = Body(...)):
+@app.post("/api/save/{dataset_name}/{split}/{filename}")
+def save_annotation(dataset_name: str, split: SplitEnum, filename: str, data: ImageAnnotation = Body(...)):
     """Saves the current state to JSON."""
-    json_path = LABELED_DATA_DIR / split.value / f"{Path(filename).stem}.json"
+    ds_path = get_dataset_path(dataset_name)
+    save_dir = ds_path / "labeled_data" / split.value
+    # Ensure it exists
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    json_path = save_dir / f"{Path(filename).stem}.json"
     
     with open(json_path, "w") as f:
         json.dump(data.dict(), f, indent=2)
